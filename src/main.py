@@ -42,7 +42,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 load_dotenv()
 
-API_SECRET_KEY = os.getenv("API_SECRET_KEY", "")
+API_SECRET_KEY = os.getenv("API_SECRET_KEY", "sk_track2_987654321")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 logging.basicConfig(level=logging.INFO)
