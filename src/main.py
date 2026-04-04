@@ -33,7 +33,6 @@ import pdfplumber
 from docx import Document
 from PIL import Image
 import pytesseract
-import google.generativeai as genai # Note: we use google-genai but this is for type hints if needed
 from google import genai
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
