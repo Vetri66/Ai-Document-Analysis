@@ -1,0 +1,8 @@
+.env
+__pycache__/
+.DS_Store
+*.pyc
+verify_project.py
+test_api.py
+final_sanitation_check.py
+list_models.py
