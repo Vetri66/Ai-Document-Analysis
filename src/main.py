@@ -102,6 +102,11 @@ class FinancialDetails(BaseModel):
     due_date: str = ""
 
 
+class ContactDetails(BaseModel):
+    email: str = ""
+    phone: str = ""
+
+
 class SuccessResponse(BaseModel):
     status: str = "success"
     fileName: str
@@ -109,7 +114,9 @@ class SuccessResponse(BaseModel):
     summary: str
     key_points: list[str] = []
     entities: EntitiesModel
+    contact_details: ContactDetails = ContactDetails()
     financial_details: FinancialDetails = FinancialDetails()
+    payment_status: str = "Unknown"
     sentiment: str
     confidence: float = 0.0
 
@@ -179,21 +186,25 @@ EXTRACTORS = {
 # Gemini AI Analysis
 # ---------------------------------------------------------------------------
 
-ANALYSIS_PROMPT = """You are an advanced AI document intelligence system.
+ANALYSIS_PROMPT = """You are an advanced AI Document Intelligence System.
 
-STRICT OUTPUT RULES:
-- Return ONLY a valid JSON object
-- Do NOT include any explanation or extra text
-- Do NOT include markdown (no ```json)
-- Output must start with { and end with }
-- Ensure JSON is complete and valid (no missing or extra braces)
+Your task is to analyze structured or unstructured content extracted from PDFs or images (OCR text).
+
+STRICT RULES (MANDATORY):
+- Return ONLY a valid JSON object.
+- Do NOT include any explanation or extra text.
+- Do NOT include markdown (no ```json).
+- Output must start with { and end with }.
+- Ensure no missing or extra braces.
+- Use double quotes for all keys and values.
+- Do NOT include trailing commas.
 
 OUTPUT FORMAT:
 {
   "status": "success",
   "document_type": "invoice | receipt | report | letter | unknown",
-  "summary": "Clear 2-3 sentence professional summary including key context (who, what, when, amount, purpose)",
-  "key_points": ["Important point 1", "Important point 2", "Important point 3"],
+  "summary": "Write a professional 2-3 sentence summary clearly mentioning who issued the document, who received it, what service/product was involved, amount, and date.",
+  "key_points": ["Key insight 1", "Key insight 2", "Key insight 3", "Key insight 4"],
   "entities": {
     "names": [],
     "dates": [],
@@ -201,29 +212,40 @@ OUTPUT FORMAT:
     "amounts": [],
     "locations": []
   },
+  "contact_details": {
+    "email": "",
+    "phone": ""
+  },
   "financial_details": {
     "total_amount": "",
-    "currency": "",
+    "currency": "INR | USD | etc",
     "tax": "",
     "due_date": ""
   },
+  "payment_status": "Completed | Pending | Unknown",
   "sentiment": "Positive | Neutral | Negative",
   "confidence": 0.0
 }
 
-INSTRUCTIONS:
-- Extract all readable content from the document
-- Infer missing structure intelligently
-- If it is an invoice/receipt, prioritize financial fields
-- If information is missing, return empty string "" or empty list []
-- Summary must be professional and meaningful
-- Confidence should be between 0 and 1 based on clarity of extracted data
+INTELLIGENT EXTRACTION RULES:
+- Identify who issued the document and who received it
+- Extract email and phone if present
+- Detect payment status (Completed / Pending)
+- Infer currency from symbols (₹ → INR, $ → USD)
+- Extract location if available
+- If it is an invoice, prioritize financial and service-related details
+- If any field is missing, return "" or []
+
+SUMMARY REQUIREMENTS:
+- Must be clear, professional, and informative
+- Include: person/company, service, amount, and date
+- Avoid vague or generic sentences
 
 FAIL-SAFE:
-If you cannot follow the format exactly, return:
+If you cannot strictly follow the format, return:
 {"status":"error","message":"invalid_json"}
 
-INPUT CONTENT:
+INPUT:
 {text}"""
 
 
@@ -234,7 +256,9 @@ def fallback_analysis(extracted_text: str) -> dict:
         "summary": extracted_text[:200].strip(),
         "key_points": [],
         "entities": {"names": [], "dates": [], "organizations": [], "amounts": [], "locations": []},
+        "contact_details": {"email": "", "phone": ""},
         "financial_details": {"total_amount": "", "currency": "", "tax": "", "due_date": ""},
+        "payment_status": "Unknown",
         "sentiment": "Neutral",
         "confidence": 0.0,
     }
@@ -254,6 +278,8 @@ def _parse_response(raw: str) -> dict:
         raise ValueError("Response missing required fields")
     if result["sentiment"] not in {"Positive", "Neutral", "Negative"}:
         result["sentiment"] = "Neutral"
+    if result.get("payment_status") not in {"Completed", "Pending", "Unknown"}:
+        result["payment_status"] = "Unknown"
     entities = result.get("entities", {})
     for key in ("names", "dates", "organizations", "amounts", "locations"):
         if key not in entities or not isinstance(entities[key], list):
@@ -264,6 +290,8 @@ def _parse_response(raw: str) -> dict:
         if key not in fin:
             fin[key] = ""
     result["financial_details"] = fin
+    contact = result.get("contact_details", {})
+    result["contact_details"] = {"email": contact.get("email", ""), "phone": contact.get("phone", "")}
     result.setdefault("document_type", "unknown")
     result.setdefault("key_points", [])
     result.setdefault("confidence", 0.0)
@@ -364,7 +392,9 @@ async def document_analyze(request: Request, body: DocumentRequest):
         summary=analysis["summary"],
         key_points=analysis.get("key_points", []),
         entities=EntitiesModel(**analysis["entities"]),
+        contact_details=ContactDetails(**analysis.get("contact_details", {})),
         financial_details=FinancialDetails(**analysis.get("financial_details", {})),
+        payment_status=analysis.get("payment_status", "Unknown"),
         sentiment=analysis["sentiment"],
         confidence=analysis.get("confidence", 0.0),
     )
