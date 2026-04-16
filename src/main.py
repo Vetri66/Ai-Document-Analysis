@@ -262,6 +262,16 @@ async def health_check():
     return {"status": "running"}
 
 
+@app.get("/debug/env")
+async def debug_env():
+    key = os.getenv("GEMINI_API_KEY", "")
+    return {
+        "gemini_key_set": bool(key),
+        "gemini_key_preview": f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "empty",
+        "api_secret_set": bool(os.getenv("API_SECRET_KEY", "")),
+    }
+
+
 @app.post("/api/document-analyze")
 async def document_analyze(request: Request, body: DocumentRequest):
     """
