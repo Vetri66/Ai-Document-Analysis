@@ -34,7 +34,7 @@ from docx import Document
 from PIL import Image
 import pytesseract
 from google import genai
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from google.api_core.exceptions import ResourceExhausted
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -164,7 +164,7 @@ EXTRACTORS = {
 # Gemini AI Analysis
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are a document analysis AI. Analyse the provided text and respond ONLY with a raw JSON object. No markdown, no backticks, no explanation outside the JSON.
+GEMINI_PROMPT = """You are a document analysis AI. Analyse the provided text and respond ONLY with a raw JSON object. No markdown, no backticks, no explanation outside the JSON.
 
 Required JSON structure:
 {
@@ -181,70 +181,68 @@ Required JSON structure:
 Rules:
 - All arrays may be empty [] if nothing found
 - sentiment must be exactly one of: Positive, Neutral, Negative
-- Return ONLY the JSON object, nothing else"""
+- Return ONLY the JSON object, nothing else
+
+Document text:
+{text}"""
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type(Exception), # In production, refine this to specific API errors
-    before_sleep=lambda retry_state: logger.warning(f"Retrying Gemini API... Attempt {retry_state.attempt_number}")
-)
-def analyse_with_gemini(extracted_text: str) -> dict:
-    """Send extracted text to Gemini and return parsed JSON analysis."""
-    if not gemini_client:
-        raise HTTPException(status_code=500, detail="GEMINI_API_KEY is not configured")
+def fallback_analysis(extracted_text: str) -> dict:
+    """Return a safe fallback response when Gemini is unavailable."""
+    return {
+        "summary": extracted_text[:200].strip(),
+        "entities": {"names": [], "dates": [], "organizations": [], "amounts": []},
+        "sentiment": "Neutral",
+    }
 
-    try:
-        response = gemini_client.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=f"Analyse the following document text:\n\n{extracted_text}",
-            config={
-                "system_instruction": SYSTEM_PROMPT,
-                "temperature": 0.1,
-            },
-        )
-    except Exception as exc:
-        logger.exception("Gemini API error detail:")
-        raise HTTPException(status_code=502, detail=f"Gemini API error: {exc}")
 
-    raw_response = response.text.strip()
-
-    # Strip markdown code fences if Gemini wraps the JSON
-    if raw_response.startswith("```"):
-        lines = raw_response.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        raw_response = "\n".join(lines).strip()
-
-    try:
-        result = json.loads(raw_response)
-    except json.JSONDecodeError:
-        logger.error("Failed to parse Gemini response as JSON: %s", raw_response)
-        raise HTTPException(
-            status_code=502,
-            detail="Gemini returned an invalid JSON response. Please try again.",
-        )
-
-    # Validate required keys
-    if "summary" not in result or "entities" not in result or "sentiment" not in result:
-        raise HTTPException(
-            status_code=502,
-            detail="Gemini response missing required fields.",
-        )
-
-    # Ensure sentiment is one of the allowed values
-    allowed_sentiments = {"Positive", "Neutral", "Negative"}
-    if result["sentiment"] not in allowed_sentiments:
+def _parse_gemini_response(raw: str) -> dict:
+    """Strip markdown fences and parse JSON from Gemini response."""
+    if raw.startswith("```"):
+        lines = [l for l in raw.split("\n") if not l.strip().startswith("```")]
+        raw = "\n".join(lines).strip()
+    result = json.loads(raw)
+    if not all(k in result for k in ("summary", "entities", "sentiment")):
+        raise ValueError("Gemini response missing required fields")
+    if result["sentiment"] not in {"Positive", "Neutral", "Negative"}:
         result["sentiment"] = "Neutral"
-
-    # Ensure all entity sub-keys exist
     entities = result.get("entities", {})
     for key in ("names", "dates", "organizations", "amounts"):
         if key not in entities or not isinstance(entities[key], list):
             entities[key] = []
     result["entities"] = entities
-
     return result
+
+
+def analyse_with_gemini(extracted_text: str) -> dict:
+    """Single Gemini API call with one retry. Falls back gracefully on 429."""
+    if not gemini_client:
+        logger.warning("Gemini client not configured — using fallback")
+        return fallback_analysis(extracted_text)
+
+    prompt = GEMINI_PROMPT.format(text=extracted_text)
+
+    for attempt in range(2):  # max 1 retry
+        try:
+            response = gemini_client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+                config={"temperature": 0.1},
+            )
+            return _parse_gemini_response(response.text.strip())
+        except ResourceExhausted:
+            logger.warning("Gemini 429 quota exceeded — using fallback")
+            return fallback_analysis(extracted_text)
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.error("Gemini parse error (attempt %d): %s", attempt + 1, exc)
+            if attempt == 1:
+                return fallback_analysis(extracted_text)
+        except Exception as exc:
+            logger.error("Gemini API error (attempt %d): %s", attempt + 1, exc)
+            if attempt == 1:
+                return fallback_analysis(extracted_text)
+
+    return fallback_analysis(extracted_text)
 
 
 # ---------------------------------------------------------------------------
@@ -292,12 +290,11 @@ async def document_analyze(request: Request, body: DocumentRequest):
     if not extracted_text.strip():
         raise HTTPException(status_code=400, detail="No text could be extracted from the document")
 
-    # --- 4. Send to Gemini AI ---
+    # --- 4. Analyse with Gemini (falls back gracefully on quota/errors) ---
     analysis = analyse_with_gemini(extracted_text)
 
     # --- 5. Build and return response ---
     return SuccessResponse(
-        status="success",
         fileName=body.fileName,
         summary=analysis["summary"],
         entities=EntitiesModel(**analysis["entities"]),
