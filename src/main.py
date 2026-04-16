@@ -167,26 +167,38 @@ EXTRACTORS = {
 # Gemini AI Analysis
 # ---------------------------------------------------------------------------
 
-GEMINI_PROMPT = """You are a document analysis AI. Analyse the provided text and respond ONLY with a raw JSON object. No markdown, no backticks, no explanation outside the JSON.
+GEMINI_PROMPT = """You are a document analysis AI.
 
-Required JSON structure:
+STRICT INSTRUCTIONS (MUST FOLLOW):
+- Return ONLY a valid JSON object.
+- Do NOT include any explanation, notes, or extra text.
+- Do NOT include markdown (no ```json).
+- Output must start with { and end with }.
+- Do NOT add extra braces or miss closing braces.
+- Ensure the JSON is syntactically correct.
+- Use double quotes for all keys and values.
+- Do NOT include trailing commas.
+
+OUTPUT FORMAT:
 {
-  "summary": "2-4 sentence concise and accurate summary of the document",
+  "summary": "Concise summary of the document",
   "entities": {
-    "names": ["list of person names found"],
-    "dates": ["list of dates found"],
-    "organizations": ["list of organization names found"],
-    "amounts": ["list of monetary amounts found"]
+    "names": [],
+    "dates": [],
+    "organizations": [],
+    "amounts": []
   },
   "sentiment": "Positive | Neutral | Negative"
 }
 
-Rules:
-- All arrays may be empty [] if nothing found
-- sentiment must be exactly one of: Positive, Neutral, Negative
-- Return ONLY the JSON object, nothing else
+FAIL-SAFE RULE:
+If you cannot strictly follow the format, return exactly:
+{"error": "invalid_json"}
 
-Document text:
+TASK:
+Analyze the following document and return the result strictly in the JSON format above.
+
+DOCUMENT:
 {text}"""
 
 
@@ -235,9 +247,11 @@ def analyse_with_gemini(extracted_text: str) -> dict:
                 max_tokens=2048,
             )
             raw = response.choices[0].message.content.strip()
-            # Fix truncated JSON by ensuring it ends with closing braces
-            if not raw.endswith("}"):
-                raw = raw.rstrip() + "\n}\n}"
+            # Extract first complete JSON object from response
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            if start != -1 and end > start:
+                raw = raw[start:end]
             return _parse_gemini_response(raw)
         except (json.JSONDecodeError, ValueError) as exc:
             logger.error("Parse error (attempt %d): %s", attempt + 1, exc)
