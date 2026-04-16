@@ -22,6 +22,7 @@ import io
 import json
 import base64
 import logging
+from openai import OpenAI
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -33,7 +34,6 @@ import pdfplumber
 from docx import Document
 from PIL import Image
 import pytesseract
-from google import genai
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -42,16 +42,18 @@ from google import genai
 load_dotenv()
 
 API_SECRET_KEY = os.getenv("API_SECRET_KEY", "sk_track2_987654321")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize Gemini client
-def get_gemini_client():
-    key = os.getenv("GEMINI_API_KEY", "")
+def get_nvidia_client():
+    key = os.getenv("NVIDIA_API_KEY", "")
     if key:
-        return genai.Client(api_key=key)
+        return OpenAI(
+            base_url="https://integrate.api.nvidia.com/v1",
+            api_key=key,
+        )
     return None
 
 # ---------------------------------------------------------------------------
@@ -216,35 +218,37 @@ def _parse_gemini_response(raw: str) -> dict:
 
 
 def analyse_with_gemini(extracted_text: str) -> dict:
-    """Single Gemini API call with one retry. Falls back gracefully on errors."""
-    client = get_gemini_client()
+    """Single NVIDIA API call with one retry. Falls back gracefully on errors."""
+    client = get_nvidia_client()
     if not client:
-        logger.warning("Gemini client not configured — using fallback")
+        logger.warning("NVIDIA client not configured — using fallback")
         return fallback_analysis(extracted_text)
 
     prompt = GEMINI_PROMPT.replace("{text}", extracted_text)
 
-    for attempt in range(2):  # max 1 retry
+    for attempt in range(2):
         try:
-            response = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt,
-                config={"temperature": 0.1},
+            response = client.chat.completions.create(
+                model="meta/llama-3.1-8b-instruct",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=1024,
             )
-            return _parse_gemini_response(response.text.strip())
+            raw = response.choices[0].message.content.strip()
+            return _parse_gemini_response(raw)
         except (json.JSONDecodeError, ValueError) as exc:
-            logger.error("Gemini parse error (attempt %d): %s", attempt + 1, exc)
+            logger.error("Parse error (attempt %d): %s", attempt + 1, exc)
             if attempt == 1:
                 return fallback_analysis(extracted_text)
         except Exception as exc:
             exc_str = str(exc)
-            if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str:
-                logger.warning("Gemini 429 quota exceeded — using fallback")
+            if "429" in exc_str or "rate" in exc_str.lower():
+                logger.warning("NVIDIA 429 rate limit — using fallback")
                 return fallback_analysis(extracted_text)
-            if "401" in exc_str or "UNAUTHENTICATED" in exc_str:
-                logger.error("Gemini 401 invalid API key — using fallback")
+            if "401" in exc_str or "unauthorized" in exc_str.lower():
+                logger.error("NVIDIA 401 invalid API key — using fallback")
                 return fallback_analysis(extracted_text)
-            logger.error("Gemini API error (attempt %d): %s", attempt + 1, exc)
+            logger.error("NVIDIA API error (attempt %d): %s", attempt + 1, exc)
             if attempt == 1:
                 return fallback_analysis(extracted_text)
 

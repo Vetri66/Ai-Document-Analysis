@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-google-genai
+openai
 pdfplumber
 python-docx
 pytesseract
