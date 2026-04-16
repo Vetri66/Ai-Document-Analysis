@@ -227,7 +227,7 @@ def analyse_with_gemini(extracted_text: str) -> dict:
     for attempt in range(2):  # max 1 retry
         try:
             response = client.models.generate_content(
-                model="gemini-1.5-flash-latest",
+                model="gemini-2.0-flash",
                 contents=prompt,
                 config={"temperature": 0.1},
             )
