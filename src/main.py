@@ -92,14 +92,26 @@ class EntitiesModel(BaseModel):
     dates: list[str] = []
     organizations: list[str] = []
     amounts: list[str] = []
+    locations: list[str] = []
+
+
+class FinancialDetails(BaseModel):
+    total_amount: str = ""
+    currency: str = ""
+    tax: str = ""
+    due_date: str = ""
 
 
 class SuccessResponse(BaseModel):
     status: str = "success"
     fileName: str
+    document_type: str = "unknown"
     summary: str
+    key_points: list[str] = []
     entities: EntitiesModel
+    financial_details: FinancialDetails = FinancialDetails()
     sentiment: str
+    confidence: float = 0.0
 
 
 class ErrorResponse(BaseModel):
@@ -167,65 +179,94 @@ EXTRACTORS = {
 # Gemini AI Analysis
 # ---------------------------------------------------------------------------
 
-GEMINI_PROMPT = """You are a document analysis AI.
+ANALYSIS_PROMPT = """You are an advanced AI document intelligence system.
 
-STRICT INSTRUCTIONS (MUST FOLLOW):
-- Return ONLY a valid JSON object.
-- Do NOT include any explanation, notes, or extra text.
-- Do NOT include markdown (no ```json).
-- Output must start with { and end with }.
-- Do NOT add extra braces or miss closing braces.
-- Ensure the JSON is syntactically correct.
-- Use double quotes for all keys and values.
-- Do NOT include trailing commas.
+STRICT OUTPUT RULES:
+- Return ONLY a valid JSON object
+- Do NOT include any explanation or extra text
+- Do NOT include markdown (no ```json)
+- Output must start with { and end with }
+- Ensure JSON is complete and valid (no missing or extra braces)
 
 OUTPUT FORMAT:
 {
-  "summary": "Concise summary of the document",
+  "status": "success",
+  "document_type": "invoice | receipt | report | letter | unknown",
+  "summary": "Clear 2-3 sentence professional summary including key context (who, what, when, amount, purpose)",
+  "key_points": ["Important point 1", "Important point 2", "Important point 3"],
   "entities": {
     "names": [],
     "dates": [],
     "organizations": [],
-    "amounts": []
+    "amounts": [],
+    "locations": []
   },
-  "sentiment": "Positive | Neutral | Negative"
+  "financial_details": {
+    "total_amount": "",
+    "currency": "",
+    "tax": "",
+    "due_date": ""
+  },
+  "sentiment": "Positive | Neutral | Negative",
+  "confidence": 0.0
 }
 
-FAIL-SAFE RULE:
-If you cannot strictly follow the format, return exactly:
-{"error": "invalid_json"}
+INSTRUCTIONS:
+- Extract all readable content from the document
+- Infer missing structure intelligently
+- If it is an invoice/receipt, prioritize financial fields
+- If information is missing, return empty string "" or empty list []
+- Summary must be professional and meaningful
+- Confidence should be between 0 and 1 based on clarity of extracted data
 
-TASK:
-Analyze the following document and return the result strictly in the JSON format above.
+FAIL-SAFE:
+If you cannot follow the format exactly, return:
+{"status":"error","message":"invalid_json"}
 
-DOCUMENT:
+INPUT CONTENT:
 {text}"""
 
 
 def fallback_analysis(extracted_text: str) -> dict:
-    """Return a safe fallback response when Gemini is unavailable."""
+    """Return a safe fallback response when AI is unavailable."""
     return {
+        "document_type": "unknown",
         "summary": extracted_text[:200].strip(),
-        "entities": {"names": [], "dates": [], "organizations": [], "amounts": []},
+        "key_points": [],
+        "entities": {"names": [], "dates": [], "organizations": [], "amounts": [], "locations": []},
+        "financial_details": {"total_amount": "", "currency": "", "tax": "", "due_date": ""},
         "sentiment": "Neutral",
+        "confidence": 0.0,
     }
 
 
-def _parse_gemini_response(raw: str) -> dict:
-    """Strip markdown fences and parse JSON from Gemini response."""
+def _parse_response(raw: str) -> dict:
+    """Extract and parse JSON from model response."""
     if raw.startswith("```"):
-        lines = [l for l in raw.split("\n") if not l.strip().startswith("```")]
-        raw = "\n".join(lines).strip()
+        raw = "\n".join(l for l in raw.split("\n") if not l.strip().startswith("```")).strip()
+    start, end = raw.find("{"), raw.rfind("}") + 1
+    if start != -1 and end > start:
+        raw = raw[start:end]
     result = json.loads(raw)
+    if result.get("status") == "error":
+        raise ValueError("Model returned error status")
     if not all(k in result for k in ("summary", "entities", "sentiment")):
-        raise ValueError("Gemini response missing required fields")
+        raise ValueError("Response missing required fields")
     if result["sentiment"] not in {"Positive", "Neutral", "Negative"}:
         result["sentiment"] = "Neutral"
     entities = result.get("entities", {})
-    for key in ("names", "dates", "organizations", "amounts"):
+    for key in ("names", "dates", "organizations", "amounts", "locations"):
         if key not in entities or not isinstance(entities[key], list):
             entities[key] = []
     result["entities"] = entities
+    fin = result.get("financial_details", {})
+    for key in ("total_amount", "currency", "tax", "due_date"):
+        if key not in fin:
+            fin[key] = ""
+    result["financial_details"] = fin
+    result.setdefault("document_type", "unknown")
+    result.setdefault("key_points", [])
+    result.setdefault("confidence", 0.0)
     return result
 
 
@@ -236,7 +277,8 @@ def analyse_with_gemini(extracted_text: str) -> dict:
         logger.warning("NVIDIA client not configured — using fallback")
         return fallback_analysis(extracted_text)
 
-    prompt = GEMINI_PROMPT.replace("{text}", extracted_text)
+    prompt = ANALYSIS_PROMPT.replace("{text}", extracted_text)
+    raw = ""
 
     for attempt in range(2):
         try:
@@ -247,15 +289,9 @@ def analyse_with_gemini(extracted_text: str) -> dict:
                 max_tokens=2048,
             )
             raw = response.choices[0].message.content.strip()
-            # Extract first complete JSON object from response
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            if start != -1 and end > start:
-                raw = raw[start:end]
-            return _parse_gemini_response(raw)
+            return _parse_response(raw)
         except (json.JSONDecodeError, ValueError) as exc:
-            logger.error("Parse error (attempt %d): %s", attempt + 1, exc)
-            logger.error("Raw response was: %s", raw if 'raw' in dir() else 'N/A')
+            logger.error("Parse error (attempt %d): %s | raw: %s", attempt + 1, exc, raw[:300])
             if attempt == 1:
                 return fallback_analysis(extracted_text)
         except Exception as exc:
@@ -324,9 +360,13 @@ async def document_analyze(request: Request, body: DocumentRequest):
     # --- 5. Build and return response ---
     return SuccessResponse(
         fileName=body.fileName,
+        document_type=analysis.get("document_type", "unknown"),
         summary=analysis["summary"],
+        key_points=analysis.get("key_points", []),
         entities=EntitiesModel(**analysis["entities"]),
+        financial_details=FinancialDetails(**analysis.get("financial_details", {})),
         sentiment=analysis["sentiment"],
+        confidence=analysis.get("confidence", 0.0),
     )
 
 
