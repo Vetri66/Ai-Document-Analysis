@@ -238,6 +238,7 @@ def analyse_with_gemini(extracted_text: str) -> dict:
             return _parse_gemini_response(raw)
         except (json.JSONDecodeError, ValueError) as exc:
             logger.error("Parse error (attempt %d): %s", attempt + 1, exc)
+            logger.error("Raw response was: %s", raw if 'raw' in dir() else 'N/A')
             if attempt == 1:
                 return fallback_analysis(extracted_text)
         except Exception as exc:
