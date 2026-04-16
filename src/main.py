@@ -232,9 +232,12 @@ def analyse_with_gemini(extracted_text: str) -> dict:
                 model="meta/llama-3.1-8b-instruct",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=1024,
+                max_tokens=2048,
             )
             raw = response.choices[0].message.content.strip()
+            # Fix truncated JSON by ensuring it ends with closing braces
+            if not raw.endswith("}"):
+                raw = raw.rstrip() + "\n}\n}"
             return _parse_gemini_response(raw)
         except (json.JSONDecodeError, ValueError) as exc:
             logger.error("Parse error (attempt %d): %s", attempt + 1, exc)
