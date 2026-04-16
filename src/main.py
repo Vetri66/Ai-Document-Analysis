@@ -386,7 +386,7 @@ async def document_analyze(request: Request, body: DocumentRequest):
     analysis = analyse_with_gemini(extracted_text)
 
     # --- 5. Build and return response ---
-    return SuccessResponse(
+    return JSONResponse(content=json.loads(SuccessResponse(
         fileName=body.fileName,
         document_type=analysis.get("document_type", "unknown"),
         summary=analysis["summary"],
@@ -397,7 +397,7 @@ async def document_analyze(request: Request, body: DocumentRequest):
         payment_status=analysis.get("payment_status", "Unknown"),
         sentiment=analysis["sentiment"],
         confidence=analysis.get("confidence", 0.0),
-    )
+    ).model_dump_json()), media_type="application/json")
 
 
 # ---------------------------------------------------------------------------
