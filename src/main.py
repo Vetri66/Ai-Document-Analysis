@@ -219,7 +219,7 @@ def analyse_with_gemini(extracted_text: str) -> dict:
         logger.warning("Gemini client not configured — using fallback")
         return fallback_analysis(extracted_text)
 
-    prompt = GEMINI_PROMPT.format(text=extracted_text)
+    prompt = GEMINI_PROMPT.replace("{text}", extracted_text)
 
     for attempt in range(2):  # max 1 retry
         try:
