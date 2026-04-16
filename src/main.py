@@ -34,7 +34,6 @@ from docx import Document
 from PIL import Image
 import pytesseract
 from google import genai
-from google.api_core.exceptions import ResourceExhausted
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -230,9 +229,11 @@ def analyse_with_gemini(extracted_text: str) -> dict:
                 config={"temperature": 0.1},
             )
             return _parse_gemini_response(response.text.strip())
-        except ResourceExhausted:
-            logger.warning("Gemini 429 quota exceeded — using fallback")
-            return fallback_analysis(extracted_text)
+        except Exception as exc:
+            if "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc):
+                logger.warning("Gemini 429 quota exceeded — using fallback")
+                return fallback_analysis(extracted_text)
+            raise
         except (json.JSONDecodeError, ValueError) as exc:
             logger.error("Gemini parse error (attempt %d): %s", attempt + 1, exc)
             if attempt == 1:
