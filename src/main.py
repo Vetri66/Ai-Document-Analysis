@@ -48,9 +48,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize Gemini client
-gemini_client = None
-if GEMINI_API_KEY:
-    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+def get_gemini_client():
+    key = os.getenv("GEMINI_API_KEY", "")
+    if key:
+        return genai.Client(api_key=key)
+    return None
 
 # ---------------------------------------------------------------------------
 # FastAPI App
@@ -214,8 +216,9 @@ def _parse_gemini_response(raw: str) -> dict:
 
 
 def analyse_with_gemini(extracted_text: str) -> dict:
-    """Single Gemini API call with one retry. Falls back gracefully on 429."""
-    if not gemini_client:
+    """Single Gemini API call with one retry. Falls back gracefully on errors."""
+    client = get_gemini_client()
+    if not client:
         logger.warning("Gemini client not configured — using fallback")
         return fallback_analysis(extracted_text)
 
@@ -223,22 +226,24 @@ def analyse_with_gemini(extracted_text: str) -> dict:
 
     for attempt in range(2):  # max 1 retry
         try:
-            response = gemini_client.models.generate_content(
+            response = client.models.generate_content(
                 model="gemini-2.0-flash",
                 contents=prompt,
                 config={"temperature": 0.1},
             )
             return _parse_gemini_response(response.text.strip())
-        except Exception as exc:
-            if "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc):
-                logger.warning("Gemini 429 quota exceeded — using fallback")
-                return fallback_analysis(extracted_text)
-            raise
         except (json.JSONDecodeError, ValueError) as exc:
             logger.error("Gemini parse error (attempt %d): %s", attempt + 1, exc)
             if attempt == 1:
                 return fallback_analysis(extracted_text)
         except Exception as exc:
+            exc_str = str(exc)
+            if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str:
+                logger.warning("Gemini 429 quota exceeded — using fallback")
+                return fallback_analysis(extracted_text)
+            if "401" in exc_str or "UNAUTHENTICATED" in exc_str:
+                logger.error("Gemini 401 invalid API key — using fallback")
+                return fallback_analysis(extracted_text)
             logger.error("Gemini API error (attempt %d): %s", attempt + 1, exc)
             if attempt == 1:
                 return fallback_analysis(extracted_text)
