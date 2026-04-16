@@ -186,31 +186,32 @@ EXTRACTORS = {
 # Gemini AI Analysis
 # ---------------------------------------------------------------------------
 
-ANALYSIS_PROMPT = """You are an advanced AI Document Intelligence System.
+ANALYSIS_PROMPT = """You are an AI system for document analysis.
 
-Your task is to analyze content extracted from PDFs or images (OCR text) and return structured insights.
-
-STRICT RULES (MANDATORY):
-- Return ONLY a valid JSON object.
+STRICT RULES (VERY IMPORTANT):
+- Return ONLY valid JSON.
 - Do NOT include any explanation or extra text.
-- Do NOT include markdown (no ```json).
 - Output must start with { and end with }.
-- Ensure no missing or extra braces.
-- Use double quotes for all keys and values.
-- Do NOT include trailing commas.
+- Ensure JSON is complete and valid.
 
-CRITICAL ACCURACY RULE:
-- Do NOT assume roles, relationships, or meanings that are NOT explicitly stated.
-- Do NOT infer roles like "representative", "client", "vendor" unless clearly mentioned.
-- Stick strictly to facts present in the document.
-- If something is unclear, keep it neutral.
+CRITICAL FACT RULE:
+- ONLY use information explicitly present in the document.
+- DO NOT assume roles like "client", "representative", "vendor", or "customer".
+- DO NOT add relationships between people or organizations unless clearly stated.
+- If unclear, use neutral phrasing like: "Shruthi issued an invoice to SNS Square"
+
+SUMMARY RULES:
+- Write a professional 2-3 sentence summary.
+- Must include: name, organization, amount, and date.
+- DO NOT add interpretations.
+- Keep it factual and neutral.
 
 OUTPUT FORMAT:
 {
   "status": "success",
   "document_type": "invoice | receipt | report | letter | unknown",
-  "summary": "Write a professional 2-3 sentence summary including who, what, amount, and date WITHOUT making assumptions.",
-  "key_points": ["Fact-based insight 1", "Fact-based insight 2", "Fact-based insight 3", "Fact-based insight 4"],
+  "summary": "",
+  "key_points": [],
   "entities": {
     "names": [],
     "dates": [],
@@ -224,7 +225,7 @@ OUTPUT FORMAT:
   },
   "financial_details": {
     "total_amount": "",
-    "currency": "INR | USD | etc",
+    "currency": "",
     "tax": "",
     "due_date": ""
   },
@@ -233,20 +234,13 @@ OUTPUT FORMAT:
   "confidence": 0.0
 }
 
-EXTRACTION RULES:
-- Extract only what is clearly present in the document
-- Infer currency from symbols (₹ → INR, $ → USD)
-- Detect payment status if explicitly mentioned
-- Include scalability/remarks if clearly written
-- If any field is missing, return "" or []
-
-SUMMARY RULES:
-- Must be clear, factual, and professional
-- Avoid vague or generic language
-- Do NOT add interpretations beyond the text
+KEY POINT RULES:
+- Must be factual
+- Avoid generic lines
+- Include delivery status if mentioned
 
 FAIL-SAFE:
-If you cannot strictly follow the format, return:
+If format breaks, return:
 {"status":"error","message":"invalid_json"}
 
 INPUT:
