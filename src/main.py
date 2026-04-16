@@ -188,7 +188,7 @@ EXTRACTORS = {
 
 ANALYSIS_PROMPT = """You are an advanced AI Document Intelligence System.
 
-Your task is to analyze structured or unstructured content extracted from PDFs or images (OCR text).
+Your task is to analyze content extracted from PDFs or images (OCR text) and return structured insights.
 
 STRICT RULES (MANDATORY):
 - Return ONLY a valid JSON object.
@@ -199,12 +199,18 @@ STRICT RULES (MANDATORY):
 - Use double quotes for all keys and values.
 - Do NOT include trailing commas.
 
+CRITICAL ACCURACY RULE:
+- Do NOT assume roles, relationships, or meanings that are NOT explicitly stated.
+- Do NOT infer roles like "representative", "client", "vendor" unless clearly mentioned.
+- Stick strictly to facts present in the document.
+- If something is unclear, keep it neutral.
+
 OUTPUT FORMAT:
 {
   "status": "success",
   "document_type": "invoice | receipt | report | letter | unknown",
-  "summary": "Write a professional 2-3 sentence summary clearly mentioning who issued the document, who received it, what service/product was involved, amount, and date.",
-  "key_points": ["Key insight 1", "Key insight 2", "Key insight 3", "Key insight 4"],
+  "summary": "Write a professional 2-3 sentence summary including who, what, amount, and date WITHOUT making assumptions.",
+  "key_points": ["Fact-based insight 1", "Fact-based insight 2", "Fact-based insight 3", "Fact-based insight 4"],
   "entities": {
     "names": [],
     "dates": [],
@@ -227,19 +233,17 @@ OUTPUT FORMAT:
   "confidence": 0.0
 }
 
-INTELLIGENT EXTRACTION RULES:
-- Identify who issued the document and who received it
-- Extract email and phone if present
-- Detect payment status (Completed / Pending)
+EXTRACTION RULES:
+- Extract only what is clearly present in the document
 - Infer currency from symbols (₹ → INR, $ → USD)
-- Extract location if available
-- If it is an invoice, prioritize financial and service-related details
+- Detect payment status if explicitly mentioned
+- Include scalability/remarks if clearly written
 - If any field is missing, return "" or []
 
-SUMMARY REQUIREMENTS:
-- Must be clear, professional, and informative
-- Include: person/company, service, amount, and date
-- Avoid vague or generic sentences
+SUMMARY RULES:
+- Must be clear, factual, and professional
+- Avoid vague or generic language
+- Do NOT add interpretations beyond the text
 
 FAIL-SAFE:
 If you cannot strictly follow the format, return:
